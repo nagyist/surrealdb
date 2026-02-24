@@ -40,9 +40,13 @@ cargo set-version $PACKAGES "${VERSION}"
 # Update lock file (only touch workspace crates, not dependencies)
 cargo update -p surrealdb -p surrealdb-core -p surrealdb-server
 
-# Commit changes
+# Commit changes only if there are any (idempotent when version already set)
 git add -A
-git commit -m "Prepare v${VERSION} release"
+if ! git diff --staged --quiet; then
+	git commit -m "Prepare v${VERSION} release"
+else
+	echo "No version changes (branch already at v${VERSION}), skipping commit"
+fi
 
 # Push branch (tag will be created later after successful release)
 git push origin "${RELEASE_BRANCH}"

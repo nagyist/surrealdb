@@ -2,11 +2,11 @@
 # cargo-vet imports lock
 
 [[unpublished.surrealdb]]
-version = "3.1.0-alpha"
+version = "3.0.1"
 audited_as = "3.0.0"
 
 [[unpublished.surrealdb-core]]
-version = "3.1.0-alpha"
+version = "3.0.1"
 audited_as = "3.0.0"
 
 [[publisher.addr]]
