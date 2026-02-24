@@ -9,7 +9,6 @@ use crate::buc::store::prefixed::PrefixedStore;
 use crate::buc::store::{ObjectKey, ObjectStore};
 use crate::catalog::providers::BucketProvider;
 use crate::catalog::{DatabaseId, NamespaceId};
-use crate::cnf::{GLOBAL_BUCKET, GLOBAL_BUCKET_ENFORCED};
 use crate::err::Error;
 use crate::kvs::Transaction;
 
@@ -29,6 +28,8 @@ type BucketConnections = Arc<DashMap<BucketConnectionKey, Arc<dyn ObjectStore>>>
 pub(crate) struct BucketsManager {
 	buckets: BucketConnections,
 	provider: Arc<dyn BucketStoreProvider>,
+	global_bucket: Option<String>,
+	global_bucket_enforced: bool,
 }
 
 impl BucketsManager {
@@ -37,9 +38,12 @@ impl BucketsManager {
 	/// # Arguments
 	/// * `provider` - The bucket store provider used to create new connections
 	pub(crate) fn new(provider: Arc<dyn BucketStoreProvider>) -> Self {
+		let file_cfg = crate::cnf::FileConfig::default();
 		Self {
 			buckets: Default::default(),
 			provider,
+			global_bucket: file_cfg.global_bucket,
+			global_bucket_enforced: file_cfg.global_bucket_enforced,
 		}
 	}
 
@@ -61,7 +65,7 @@ impl BucketsManager {
 		readonly: bool,
 	) -> Result<Arc<dyn ObjectStore>> {
 		// Check if the global bucket is enforced
-		if !global && *GLOBAL_BUCKET_ENFORCED {
+		if !global && self.global_bucket_enforced {
 			bail!(Error::GlobalBucketEnforced);
 		}
 		self.provider.connect(url, global, readonly).await
@@ -79,7 +83,7 @@ impl BucketsManager {
 		bu: &str,
 	) -> Result<Arc<dyn ObjectStore>> {
 		// Obtain the URL for the global bucket
-		let Some(ref url) = *GLOBAL_BUCKET else {
+		let Some(ref url) = self.global_bucket else {
 			bail!(Error::NoGlobalBucket);
 		};
 

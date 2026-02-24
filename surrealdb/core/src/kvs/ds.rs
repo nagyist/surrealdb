@@ -45,7 +45,7 @@ use crate::catalog::providers::{
 	UserProvider,
 };
 use crate::catalog::{ApiDefinition, Index, NodeLiveQuery, SubscriptionDefinition};
-use crate::cnf::NORMAL_FETCH_SIZE;
+use crate::cnf::CoreConfig;
 use crate::cnf::dynamic::DynamicConfiguration;
 use crate::ctx::Context;
 #[cfg(feature = "jwks")]
@@ -102,6 +102,8 @@ pub struct Datastore {
 	transaction_factory: TransactionFactory,
 	/// The unique id of this datastore, used in notifications.
 	id: Uuid,
+	/// Core engine configuration loaded at init time.
+	config: Arc<CoreConfig>,
 	/// Whether authentication is enabled on this datastore.
 	auth_enabled: bool,
 	/// The maximum duration timeout for running multiple statements in a query.
@@ -620,7 +622,15 @@ impl Datastore {
 	/// # }
 	/// ```
 	pub async fn new(path: &str) -> Result<Self> {
-		Self::new_with_factory(CommunityComposer(), path, CancellationToken::new()).await
+		Self::new_with_config(path, CoreConfig::from_env()).await
+	}
+
+	/// Creates a new datastore with explicit configuration.
+	pub async fn new_with_config(path: &str, config: CoreConfig) -> Result<Self> {
+		let mut ds =
+			Self::new_with_factory(CommunityComposer(), path, CancellationToken::new()).await?;
+		ds.config = Arc::new(config);
+		Ok(ds)
 	}
 
 	/// Creates a new datastore instance with a custom transaction builder factory.
@@ -657,6 +667,7 @@ impl Datastore {
 		let id = Uuid::new_v4();
 		Ok(Self {
 			id,
+			config: Arc::new(CoreConfig::default()),
 			transaction_factory: tf.clone(),
 			auth_enabled: false,
 			dynamic_configuration: DynamicConfiguration::default(),
@@ -670,11 +681,13 @@ impl Datastore {
 			jwks_cache: Arc::new(RwLock::new(JwksCache::new())),
 			#[cfg(storage)]
 			temporary_directory: None,
-			cache: Arc::new(DatastoreCache::new()),
+			cache: Arc::new(DatastoreCache::new(CoreConfig::default().caches.datastore_cache_size)),
 			buckets,
 			sequences: Sequences::new(tf, id),
 			#[cfg(feature = "surrealism")]
-			surrealism_cache: Arc::new(SurrealismCache::new()),
+			surrealism_cache: Arc::new(SurrealismCache::new(
+				CoreConfig::default().caches.surrealism_cache_size,
+			)),
 			async_event_trigger,
 		})
 	}
@@ -697,8 +710,12 @@ impl Datastore {
 	/// flushed cache. Simulating a server restart
 	pub fn restart(self) -> Self {
 		self.buckets.clear();
+		let ds_cache_size = self.config.caches.datastore_cache_size;
+		#[cfg(feature = "surrealism")]
+		let surrealism_cache_size = self.config.caches.surrealism_cache_size;
 		Self {
 			id: self.id,
+			config: self.config,
 			auth_enabled: self.auth_enabled,
 			dynamic_configuration: DynamicConfiguration::default(),
 			slow_log: self.slow_log,
@@ -711,12 +728,12 @@ impl Datastore {
 			jwks_cache: Arc::new(Default::default()),
 			#[cfg(storage)]
 			temporary_directory: self.temporary_directory,
-			cache: Arc::new(DatastoreCache::new()),
+			cache: Arc::new(DatastoreCache::new(ds_cache_size)),
 			buckets: self.buckets,
 			sequences: Sequences::new(self.transaction_factory.clone(), self.id),
 			transaction_factory: self.transaction_factory,
 			#[cfg(feature = "surrealism")]
-			surrealism_cache: Arc::new(SurrealismCache::new()),
+			surrealism_cache: Arc::new(SurrealismCache::new(surrealism_cache_size)),
 			async_event_trigger: self.async_event_trigger,
 		}
 	}
@@ -926,8 +943,12 @@ impl Datastore {
 				pass,
 				INITIAL_USER_ROLE.to_owned(),
 			);
-			let opt = Options::new(self.id, self.dynamic_configuration.clone())
-				.with_auth(Arc::new(Auth::for_root(Role::Owner)));
+			let opt = Options::new(
+				self.id,
+				self.dynamic_configuration.clone(),
+				self.config.limits.max_computation_depth,
+			)
+			.with_auth(Arc::new(Auth::for_root(Role::Owner)));
 			let mut ctx = Context::default();
 			ctx.set_transaction(txn.clone());
 			let ctx = ctx.freeze();
@@ -1167,7 +1188,11 @@ impl Datastore {
 				// Scan the live queries for this node
 				while let Some(rng) = next {
 					// Fetch the next batch of keys and values
-					let res = catch!(txn, txn.batch_keys_vals(rng, *NORMAL_FETCH_SIZE, None).await);
+					let res = catch!(
+						txn,
+						txn.batch_keys_vals(rng, self.config.batching.normal_fetch_size, None)
+							.await
+					);
 					next = res.next;
 					for (k, v) in res.result.iter() {
 						// Decode the data for this live query
@@ -1267,7 +1292,7 @@ impl Datastore {
 					let txn = self.transaction(Write, Optimistic).await?;
 					while let Some(rng) = next {
 						// Fetch the next batch of keys and values
-						let max = *NORMAL_FETCH_SIZE;
+						let max = self.config.batching.normal_fetch_size;
 						let res = catch!(txn, txn.batch_keys_vals(rng, max, None).await);
 						next = res.next;
 						for (k, v) in res.result.iter() {
@@ -2080,17 +2105,27 @@ impl Datastore {
 		Ok(())
 	}
 
+	/// Returns the core engine configuration.
+	pub fn config(&self) -> &Arc<CoreConfig> {
+		&self.config
+	}
+
 	pub fn setup_options(&self, sess: &Session) -> Options {
-		Options::new(self.id, self.dynamic_configuration.clone())
-			.with_ns(sess.ns())
-			.with_db(sess.db())
-			.with_live(sess.live())
-			.with_auth(sess.au.clone())
-			.with_auth_enabled(self.auth_enabled)
+		Options::new(
+			self.id,
+			self.dynamic_configuration.clone(),
+			self.config.limits.max_computation_depth,
+		)
+		.with_ns(sess.ns())
+		.with_db(sess.db())
+		.with_live(sess.live())
+		.with_auth(sess.au.clone())
+		.with_auth_enabled(self.auth_enabled)
 	}
 
 	pub fn setup_ctx(&self) -> Result<Context> {
 		let mut ctx = Context::from_ds(
+			self.config.clone(),
 			self.dynamic_configuration.get_query_timeout(),
 			self.slow_log.clone(),
 			self.capabilities.clone(),
@@ -2383,7 +2418,7 @@ mod test {
 
 		let dbs = Datastore::new("memory").await.unwrap().with_capabilities(Capabilities::all());
 
-		let opt = Options::new(dbs.id(), DynamicConfiguration::default())
+		let opt = Options::new(dbs.id(), DynamicConfiguration::default(), 120)
 			.with_ns(Some("test".into()))
 			.with_db(Some("test".into()))
 			.with_live(false)

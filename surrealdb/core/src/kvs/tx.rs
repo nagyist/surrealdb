@@ -91,7 +91,7 @@ impl Transaction {
 		Transaction {
 			local,
 			tr,
-			cache: TransactionCache::new(),
+			cache: TransactionCache::new(crate::cnf::CacheConfig::default().transaction_cache_size),
 			sequences,
 			cf: crate::cf::Writer::new(),
 			async_event_trigger,

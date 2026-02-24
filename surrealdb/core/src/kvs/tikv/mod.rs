@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use super::api::ScanLimit;
 use super::err::{Error, Result};
 use super::util;
-use crate::cnf::COUNT_BATCH_SIZE;
+use crate::cnf::BatchConfig;
 use crate::key::debug::Sprintable;
 use crate::kvs::api::Transactable;
 use crate::kvs::{Key, TimeStamp, TimeStampImpl, Val};
@@ -29,6 +29,8 @@ const ESTIMATED_BYTES_PER_KEY: u32 = 128;
 const ESTIMATED_BYTES_PER_VAL: u32 = 512;
 pub struct Datastore {
 	db: Pin<Arc<TransactionClient>>,
+	async_commit: bool,
+	one_phase_commit: bool,
 }
 
 pub struct Transaction {
@@ -57,10 +59,12 @@ struct TransactionInner {
 impl Datastore {
 	/// Open a new database
 	pub(crate) async fn new(path: &str) -> Result<Datastore> {
+		// Load the storage tuning configuration from environment variables
+		let tuning = cnf::TiKvConfig::from_env();
 		// Configure the client and keyspace
-		let config = match *cnf::TIKV_API_VERSION {
-			2 => match *cnf::TIKV_KEYSPACE {
-				Some(ref keyspace) => {
+		let config = match tuning.api_version {
+			2 => match tuning.keyspace.as_ref() {
+				Some(keyspace) => {
 					info!(target: TARGET, "Connecting to keyspace with cluster API V2: {keyspace}");
 					Config::default().with_keyspace(keyspace)
 				}
@@ -76,16 +80,18 @@ impl Datastore {
 			_ => return Err(Error::Datastore("Invalid TiKV API version".into())),
 		};
 		// Set the default request timeout
-		let config = config.with_timeout(Duration::from_secs(*cnf::TIKV_REQUEST_TIMEOUT));
+		let config = config.with_timeout(Duration::from_secs(tuning.request_timeout));
 		// Set the max decoding message size
 		let config =
-			config.with_grpc_max_decoding_message_size(*cnf::TIKV_GRPC_MAX_DECODING_MESSAGE_SIZE);
+			config.with_grpc_max_decoding_message_size(tuning.grpc_max_decoding_message_size);
 		// Create the client with the config
 		let client = TransactionClient::new_with_config(vec![path], config);
 		// Check for errors with the client
 		match client.await {
 			Ok(db) => Ok(Datastore {
 				db: Arc::pin(db),
+				async_commit: tuning.async_commit,
+				one_phase_commit: tuning.one_phase_commit,
 			}),
 			Err(e) => Err(Error::Datastore(e.to_string())),
 		}
@@ -110,12 +116,12 @@ impl Datastore {
 			TransactionOptions::new_optimistic()
 		};
 		// Use async commit to determine transaction state earlier
-		opt = match *cnf::TIKV_ASYNC_COMMIT {
+		opt = match self.async_commit {
 			true => opt.use_async_commit(),
 			_ => opt,
 		};
 		// Try to use one-phase commit if writing to only one region
-		opt = match *cnf::TIKV_ONE_PHASE_COMMIT {
+		opt = match self.one_phase_commit {
 			true => opt.try_one_pc(),
 			_ => opt,
 		};
@@ -485,7 +491,10 @@ impl Transactable for Transaction {
 		// Loop until we have exhausted the range
 		loop {
 			// Scan keys in key-only mode (no values fetched)
-			let iter = inner.tx.scan_keys(start..end.clone(), *COUNT_BATCH_SIZE).await?;
+			let iter = inner
+				.tx
+				.scan_keys(start..end.clone(), BatchConfig::default().count_batch_size)
+				.await?;
 			// Count the items, tracking the last key seen
 			let mut key: Option<tikv::Key> = None;
 			// Count the items in this batch
@@ -498,7 +507,7 @@ impl Transactable for Transaction {
 			// Increment the total count
 			total += count as usize;
 			// If we got fewer than batch_size, we've exhausted the range
-			if count < *COUNT_BATCH_SIZE {
+			if count < BatchConfig::default().count_batch_size {
 				break;
 			}
 			// Advance past the last key for the next batch

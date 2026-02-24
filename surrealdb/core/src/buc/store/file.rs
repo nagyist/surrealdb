@@ -10,7 +10,6 @@ use url::Url;
 use web_time::SystemTime;
 
 use super::{ListOptions, ObjectKey, ObjectMeta, ObjectStore};
-use crate::cnf::BUCKET_FOLDER_ALLOWLIST;
 use crate::err::Error;
 
 /// Options for configuring the FileStore
@@ -198,13 +197,23 @@ impl FileStore {
 
 /// Check if a path is allowed according to the allowlist
 fn is_path_allowed(path_to_check: &std::path::Path, lowercase_paths: bool) -> bool {
-	// If the allowlist is empty, nothing is allowed
-	if BUCKET_FOLDER_ALLOWLIST.is_empty() {
+	is_path_allowed_with_list(
+		path_to_check,
+		lowercase_paths,
+		&crate::cnf::FileConfig::default().bucket_folder_allowlist,
+	)
+}
+
+fn is_path_allowed_with_list(
+	path_to_check: &std::path::Path,
+	lowercase_paths: bool,
+	allowlist: &[PathBuf],
+) -> bool {
+	if allowlist.is_empty() {
 		return false;
 	}
 
-	// Check if the path is within any of the allowed paths
-	BUCKET_FOLDER_ALLOWLIST.iter().any(|allowed_path| {
+	allowlist.iter().any(|allowed_path| {
 		if lowercase_paths {
 			// Windows canonical paths often have "\\?\" prefix that needs special handling
 			// Convert to lowercase and normalize path separators for consistent comparison

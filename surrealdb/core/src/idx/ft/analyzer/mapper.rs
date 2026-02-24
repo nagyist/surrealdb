@@ -26,7 +26,7 @@ pub(in crate::idx) struct Mapper {
 impl Mapper {
 	pub(in crate::idx) async fn new(path: &Path) -> Result<Self> {
 		let mut terms = Tree::new();
-		let path = is_path_allowed(path)?;
+		let path = is_path_allowed(path, &crate::cnf::FileConfig::default().file_allowlist)?;
 		Self::iterate_file(&mut terms, &path).await?;
 		Ok(Self {
 			terms: Arc::new(terms),

@@ -7,7 +7,6 @@ use rand::prelude::SliceRandom;
 use reblessive::tree::Stk;
 
 use super::args::{Optional, Rest};
-use crate::cnf::GENERATION_ALLOCATION_LIMIT;
 use crate::ctx::FrozenContext;
 use crate::dbs::Options;
 use crate::doc::CursorDoc;
@@ -19,11 +18,11 @@ use crate::val::range::TypedRange;
 use crate::val::{Array, Closure, Value};
 
 /// Returns an error if an array of this length is too much to allocate.
-fn limit(name: &str, n: usize) -> Result<(), Error> {
-	if n > *GENERATION_ALLOCATION_LIMIT {
+fn limit(name: &str, n: usize, max: usize) -> Result<(), Error> {
+	if n > max {
 		Err(Error::InvalidFunctionArguments {
 			name: name.to_owned(),
-			message: format!("Output must not exceed {} bytes.", *GENERATION_ALLOCATION_LIMIT),
+			message: format!("Output must not exceed {max} bytes."),
 		})
 	} else {
 		Ok(())
@@ -183,9 +182,13 @@ pub fn complement((array, other): (Array, Array)) -> Result<Value> {
 	Ok(array.complement(other).into())
 }
 
+fn default_gen_limit() -> usize {
+	crate::cnf::LimitsConfig::default().generation_allocation_limit
+}
+
 pub fn concat(Rest(arrays): Rest<Array>) -> Result<Value> {
 	let len = arrays.iter().map(Array::len).sum();
-	limit("array::concat", mem::size_of::<Value>().saturating_mul(len))?;
+	limit("array::concat", mem::size_of::<Value>().saturating_mul(len), default_gen_limit())?;
 	let mut arr = Array::with_capacity(len);
 	arrays.into_iter().for_each(|mut val| {
 		arr.0.append(&mut val);
@@ -645,7 +648,11 @@ pub fn range((start_range, Optional(end)): (Value, Optional<i64>)) -> Result<Val
 		}
 	};
 
-	limit("array::range", mem::size_of::<Value>().saturating_mul(range.len()))?;
+	limit(
+		"array::range",
+		mem::size_of::<Value>().saturating_mul(range.len()),
+		default_gen_limit(),
+	)?;
 
 	Ok(range.iter().map(Value::from).collect())
 }
@@ -664,7 +671,11 @@ pub fn sequence((offset_len, Optional(len)): (i64, Optional<i64>)) -> Result<Val
 	let end = offset.saturating_add(len - 1);
 	let range = TypedRange::from_range(offset..=end);
 
-	limit("array::sequence", mem::size_of::<Value>().saturating_mul(range.len()))?;
+	limit(
+		"array::sequence",
+		mem::size_of::<Value>().saturating_mul(range.len()),
+		default_gen_limit(),
+	)?;
 	Ok(range.iter().map(Value::from).collect())
 }
 
@@ -724,7 +735,7 @@ pub fn repeat((value, count): (Value, i64)) -> Result<Value> {
 
 	// FIXME: Fix signed to unsigned casting here.
 	let count = count as usize;
-	limit("array::repeat", mem::size_of::<Value>().saturating_mul(count))?;
+	limit("array::repeat", mem::size_of::<Value>().saturating_mul(count), default_gen_limit())?;
 	Ok(Array(std::iter::repeat_n(value, count).collect()).into())
 }
 

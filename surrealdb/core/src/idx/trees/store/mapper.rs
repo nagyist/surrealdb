@@ -44,7 +44,7 @@ impl Mappers {
 	async fn insert(&self, path: &str) -> Result<()> {
 		let p = Path::new(path);
 		// Check the path is allowed
-		is_path_allowed(p)?;
+		is_path_allowed(p, &crate::cnf::FileConfig::default().file_allowlist)?;
 		if !p.exists() || !p.is_file() {
 			bail!(Error::Internal(format!("Invalid mapper path: {p:?}")));
 		}

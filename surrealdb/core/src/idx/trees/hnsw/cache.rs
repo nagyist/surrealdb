@@ -7,7 +7,7 @@ use quick_cache::{DefaultHashBuilder, Lifecycle, Weighter};
 use roaring::RoaringTreemap;
 
 use crate::catalog::{IndexId, TableId};
-use crate::cnf;
+use crate::cnf::CacheConfig;
 use crate::idx::trees::hnsw::ElementId;
 use crate::idx::trees::vector::SharedVector;
 
@@ -113,7 +113,7 @@ struct Inner {
 
 impl Default for VectorCache {
 	fn default() -> Self {
-		Self::new(*cnf::HNSW_CACHE_SIZE)
+		Self::new(CacheConfig::default().hnsw_cache_size)
 	}
 }
 impl VectorCache {

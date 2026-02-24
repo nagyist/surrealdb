@@ -23,7 +23,7 @@ use crate::buc::store::ObjectKey;
 use crate::buc::store::ObjectStore;
 use crate::catalog::providers::{CatalogProvider, DatabaseProvider, NamespaceProvider};
 use crate::catalog::{DatabaseDefinition, DatabaseId, NamespaceId};
-use crate::cnf::PROTECTED_PARAM_NAMES;
+use crate::cnf::{CoreConfig, PROTECTED_PARAM_NAMES};
 use crate::ctx::canceller::Canceller;
 use crate::ctx::reason::Reason;
 #[cfg(feature = "surrealism")]
@@ -51,6 +51,8 @@ use crate::val::Value;
 pub type FrozenContext = Arc<Context>;
 
 pub struct Context {
+	// Core engine configuration.
+	config: Arc<CoreConfig>,
 	// An optional parent context.
 	parent: Option<FrozenContext>,
 	// An optional deadline.
@@ -134,6 +136,7 @@ impl Context {
 	/// Creates a new empty background context.
 	pub(crate) fn background() -> Self {
 		Self {
+			config: Arc::new(CoreConfig::default()),
 			values: HashMap::default(),
 			parent: None,
 			deadline: None,
@@ -166,6 +169,7 @@ impl Context {
 	/// Creates a new context from a frozen parent context.
 	pub(crate) fn new(parent: &FrozenContext) -> Self {
 		Context {
+			config: parent.config.clone(),
 			values: HashMap::default(),
 			deadline: parent.deadline,
 			slow_log: parent.slow_log.clone(),
@@ -200,6 +204,7 @@ impl Context {
 	/// any parent contexts will not be accessible.
 	pub(crate) fn new_isolated(parent: &FrozenContext) -> Self {
 		Self {
+			config: parent.config.clone(),
 			values: HashMap::default(),
 			deadline: parent.deadline,
 			slow_log: parent.slow_log.clone(),
@@ -240,6 +245,7 @@ impl Context {
 	/// `Arc::get_mut` requirements between statements.
 	pub(crate) fn snapshot(from: &FrozenContext) -> Self {
 		Self {
+			config: from.config.clone(),
 			// Flatten all values from the parent chain into this context
 			values: from.collect_values(HashMap::default()),
 			deadline: from.deadline,
@@ -275,6 +281,7 @@ impl Context {
 	/// and won't be cancelled if the parent is cancelled.
 	pub(crate) fn new_concurrent(from: &FrozenContext) -> Self {
 		Self {
+			config: from.config.clone(),
 			values: HashMap::default(),
 			deadline: None,
 			slow_log: from.slow_log.clone(),
@@ -307,6 +314,7 @@ impl Context {
 	/// Creates a new context from a configured datastore.
 	#[expect(clippy::too_many_arguments)]
 	pub(crate) fn from_ds(
+		config: Arc<CoreConfig>,
 		time_out: Option<Duration>,
 		slow_log: Option<SlowLog>,
 		capabilities: Arc<Capabilities>,
@@ -320,6 +328,7 @@ impl Context {
 	) -> Result<Context> {
 		let planner_strategy = capabilities.planner_strategy().clone();
 		let mut ctx = Self {
+			config,
 			values: HashMap::default(),
 			parent: None,
 			deadline: None,
@@ -778,6 +787,11 @@ impl Context {
 	/// Set the capabilities for this context
 	pub(crate) fn add_capabilities(&mut self, caps: Arc<Capabilities>) {
 		self.capabilities = caps;
+	}
+
+	/// Get the core engine configuration.
+	pub(crate) fn config(&self) -> &CoreConfig {
+		&self.config
 	}
 
 	/// Get the capabilities for this context

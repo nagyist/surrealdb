@@ -534,9 +534,9 @@ impl Transactor {
 		// The scanner default is already NORMAL_FETCH_SIZE (500); when
 		// prefetching is active we double it to amortise the overlap cost.
 		if prefetch {
-			scanner = scanner
-				.prefetch(true)
-				.initial_batch_size(ScanLimit::Count(*crate::cnf::NORMAL_FETCH_SIZE * 2));
+			scanner = scanner.prefetch(true).initial_batch_size(ScanLimit::Count(
+				crate::cnf::BatchConfig::default().normal_fetch_size * 2,
+			));
 		}
 		// Return the stream
 		scanner

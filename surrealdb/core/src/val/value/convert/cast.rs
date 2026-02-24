@@ -6,7 +6,7 @@ use geo::Point;
 use rust_decimal::Decimal;
 use surrealdb_types::ToSql;
 
-use crate::cnf::GENERATION_ALLOCATION_LIMIT;
+use crate::cnf::LimitsConfig;
 use crate::expr::Kind;
 use crate::expr::kind::{GeometryKind, HasKind, KindLiteral};
 use crate::syn;
@@ -505,7 +505,7 @@ impl Cast for Array {
 				}
 				// checked above
 				let range = range.coerce_to_typed::<i64>().expect("range type checked above");
-				if range.len() > *GENERATION_ALLOCATION_LIMIT {
+				if range.len() > LimitsConfig::default().generation_allocation_limit {
 					return Err(CastError::RangeSizeLimit {
 						value: Box::new(Range::from(range)),
 					});

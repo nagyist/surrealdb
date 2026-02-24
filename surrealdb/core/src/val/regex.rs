@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use storekey::{BorrowDecode, Encode};
 use surrealdb_types::{SqlFormat, ToSql, write_sql};
 
-use crate::cnf::{REGEX_CACHE_SIZE, REGEX_SIZE_LIMIT};
+use crate::cnf::{LimitsConfig, REGEX_CACHE_SIZE};
 
 pub(crate) const REGEX_TOKEN: &str = "$surrealdb::private::Regex";
 
@@ -30,18 +30,25 @@ impl Regex {
 }
 
 pub(crate) fn regex_new(str: &str) -> Result<regex::Regex, regex::Error> {
+	regex_new_with_limit(str, LimitsConfig::default().regex_size_limit)
+}
+
+pub(crate) fn regex_new_with_limit(
+	str: &str,
+	regex_size_limit: usize,
+) -> Result<regex::Regex, regex::Error> {
 	static REGEX_CACHE: LazyLock<Cache<String, regex::Regex>> =
 		LazyLock::new(|| Cache::new(REGEX_CACHE_SIZE.max(10)));
 	match REGEX_CACHE.get_value_or_guard(str, None) {
 		GuardResult::Value(v) => Ok(v),
 		GuardResult::Guard(g) => {
-			let re = RegexBuilder::new(str).size_limit(*REGEX_SIZE_LIMIT).build()?;
+			let re = RegexBuilder::new(str).size_limit(regex_size_limit).build()?;
 			g.insert(re.clone()).ok();
 			Ok(re)
 		}
 		GuardResult::Timeout => {
 			warn!("Regex cache timeout");
-			RegexBuilder::new(str).size_limit(*REGEX_SIZE_LIMIT).build()
+			RegexBuilder::new(str).size_limit(regex_size_limit).build()
 		}
 	}
 }

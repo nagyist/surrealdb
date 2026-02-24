@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::config::Config;
 use crate::cli::ConfigCheck;
-use crate::cnf::LOGO;
+use crate::cnf::{LOGO, ServerConfig};
 use crate::dbs::StartCommandDbsOptions;
 use crate::ntw::RouterFactory;
 use crate::ntw::client_ip::ClientIp;
@@ -186,6 +186,7 @@ pub async fn init<
 		no_identification_headers,
 		..
 	}: StartCommandArguments,
+	server_config: ServerConfig,
 ) -> Result<()> {
 	// Install the crypto provider before any TLS operations occur
 	let _ = CryptoProvider::install_default(rustls::crypto::aws_lc_rs::default_provider());
@@ -245,7 +246,7 @@ pub async fn init<
 	// Start the node agent
 	let nodetasks = tasks::init(datastore.clone(), canceller.clone(), &config.engine);
 	// Build and run the HTTP server using the provided RouterFactory implementation
-	ntw::init::<C>(&config, datastore.clone(), canceller.clone()).await?;
+	ntw::init::<C>(&config, datastore.clone(), canceller.clone(), &server_config).await?;
 	// Shutdown and stop closed tasks
 	canceller.cancel();
 	// Wait for background tasks to finish
