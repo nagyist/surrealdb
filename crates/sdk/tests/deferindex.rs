@@ -1,7 +1,11 @@
 mod helpers;
 
 use helpers::new_ds;
+use rand::rngs::SmallRng;
+use rand::{random, Rng, SeedableRng};
+use serial_test::serial;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 use surrealdb::dbs::Session;
@@ -156,9 +160,28 @@ async fn deferred_index_survives_restart() -> Result<(), Error> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 #[test_log::test]
 // Check this issue: https://github.com/surrealdb/surrealdb/issues/6837
-async fn multi_index_concurrent_test() -> Result<(), Error> {
+async fn multi_index_concurrent_test_create_only() -> Result<(), Error> {
+	multi_index_concurrent_test(0.5, 500).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+#[test_log::test]
+async fn multi_index_concurrent_test_create_update() -> Result<(), Error> {
+	multi_index_concurrent_test(0.8, 500).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+#[test_log::test]
+async fn multi_index_concurrent_test_create_update_delete() -> Result<(), Error> {
+	multi_index_concurrent_test(1.0, 500).await
+}
+
+async fn multi_index_concurrent_test(random_range: f32, batch_count: usize) -> Result<(), Error> {
 	let sql = "DEFINE TABLE aaa;
 	DEFINE ANALYZER simple TOKENIZERS blank FILTERS lowercase, ascii, edgengram(1, 10);;
 	DEFINE INDEX field1 ON aaa FIELDS field1 SEARCH ANALYZER simple BM25 HIGHLIGHTS DEFER;
@@ -172,8 +195,13 @@ async fn multi_index_concurrent_test() -> Result<(), Error> {
 	// Define analyzer and indexes
 	dbs.execute(sql, &ses, None).await?;
 
-	batch_ingestion(dbs.clone(), &ses, 10).await?;
-	let expected_total_count = 1000;
+	{
+		let seed: u64 = random();
+		info!("Using random seed: {seed}");
+		let rng = RefCell::new(SmallRng::seed_from_u64(seed));
+		let random = || rng.borrow_mut().gen::<f32>() * random_range;
+		batch_ingestion(dbs.clone(), &ses, batch_count, random).await?
+	};
 
 	info!("Waiting for index to be built");
 	timeout(Duration::from_secs(300), async {
@@ -227,11 +255,12 @@ async fn multi_index_concurrent_test() -> Result<(), Error> {
 				real_total_count += count.as_usize();
 			}
 			info!("Real count: {real_total_count} - Index: count: {index_count} - Index status: {status}");
-			if real_total_count == expected_total_count {
-				if index_count.as_usize() == expected_total_count {
+			if index_count.as_usize() == real_total_count {
+				if status.0 != "ready" {
+					panic!("Invalid index status: {status:#}")
+				}
 					// SUCCESS!
 					break;
-				}
 			}
 			// Temporisation
 			tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -243,62 +272,75 @@ async fn multi_index_concurrent_test() -> Result<(), Error> {
 	Ok(())
 }
 
-async fn batch_ingestion(
+async fn batch_ingestion<RandomFunc: Fn() -> f32>(
 	dbs: Arc<Datastore>,
 	ses: &Session,
 	batch_count: usize,
+	random: RandomFunc,
 ) -> Result<(), Error> {
 	info!("Inserting {batch_count} batches concurrently");
 	// Create records and commit.
-	let sql_create_commit = "CREATE |aaa:10| CONTENT {
-			field1: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
-			field2: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
-			field3: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
-			field4: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
-			field5: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
-		} RETURN NONE;";
-	// Create records and cancel
-	let sql_create_throw = "
-        BEGIN;
-            CREATE |aaa:10| CONTENT
-                { field1: '-', field2: '-', field3: '-', field4: '-', field5: '-' }
-                RETURN NONE;
-			THROW 'Ooch';
-	    COMMIT;";
+	let sql_create_commit = "
+		BEGIN;
+			CREATE |aaa:10| CONTENT {
+				field1: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+				field2: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+				field3: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+				field4: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+				field5: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+			} RETURN NONE;
+			if (rand() < 0.1) {
+				THROW 'aborting transaction test';
+			};
+		COMMIT;
+	";
 	let sql_create_cancel = "
         BEGIN;
             CREATE |aaa:10| CONTENT
                 { field1: '-', field2: '-', field3: '-', field4: '-', field5: '-' }
                 RETURN NONE;
 	    CANCEL;";
-	let task_sequence = [
-		// 10 normal committed transaction
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		sql_create_commit,
-		// 5 explicitely thrown transactions
-		sql_create_throw,
-		sql_create_throw,
-		sql_create_throw,
-		sql_create_throw,
-		sql_create_throw,
-		// 5 explicitely cancelled transactions
-		sql_create_cancel,
-		sql_create_cancel,
-		sql_create_cancel,
-		sql_create_cancel,
-		sql_create_cancel,
-	];
-	let mut batch = Vec::new();
+	let sql_update_commit = "
+        BEGIN;
+			LET $before = (SELECT * FROM (SELECT * FROM aaa LIMIT 10000) ORDER rand() LIMIT 10);
+			LET $ret = [
+				$before,
+				(UPDATE $before.id CONTENT {
+					field1: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+					field2: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+					field3: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+					field4: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+					field5: rand::enum(['cupcake', 'cakecup', 'cheese', 'pie', 'noms']),
+				}),
+			];
+			if (rand() < 0.1) {
+				THROW 'aborting transaction test';
+			};
+		COMMIT;";
+	let sql_delete_commit = "
+		BEGIN;
+			LET $before = (SELECT * FROM (SELECT * FROM aaa LIMIT 10000) ORDER rand() LIMIT 10);
+			LET $ret = [
+				(DELETE $before.id RETURN before),
+				[],
+			];
+			if (rand() < 0.1) {
+				THROW 'aborting transaction test';
+			};
+		COMMIT;";
+	let mut batch = Vec::with_capacity(batch_count);
 	for _ in 0..batch_count {
-		batch.extend(task_sequence);
+		let action = random();
+		let sql = if action < 0.4 {
+			sql_create_commit
+		} else if action < 0.5 {
+			sql_create_cancel
+		} else if action < 0.8 {
+			sql_update_commit
+		} else {
+			sql_delete_commit
+		};
+		batch.push(sql);
 	}
 	concurrent_tasks(dbs.clone(), ses, batch.len(), |i| Cow::Borrowed(batch.get(i).unwrap())).await
 }
