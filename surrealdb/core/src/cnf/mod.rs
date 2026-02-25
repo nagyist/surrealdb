@@ -350,7 +350,7 @@ impl Default for BatchConfig {
 // SecurityConfig
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SecurityConfig {
 	/// Forward all authentication errors to the client. Do not use in production (default: false)
 	pub insecure_forward_access_errors: bool,
@@ -367,19 +367,11 @@ impl SecurityConfig {
 	}
 }
 
-impl Default for SecurityConfig {
-	fn default() -> Self {
-		Self {
-			insecure_forward_access_errors: false,
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // FileConfig
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FileConfig {
 	/// Paths in which files can be accessed (default: empty)
 	pub file_allowlist: Vec<PathBuf>,
@@ -402,17 +394,6 @@ impl FileConfig {
 				.unwrap_or_default(),
 			global_bucket: std::env::var("SURREAL_GLOBAL_BUCKET").ok(),
 			global_bucket_enforced: env_parse("SURREAL_GLOBAL_BUCKET_ENFORCED", false),
-		}
-	}
-}
-
-impl Default for FileConfig {
-	fn default() -> Self {
-		Self {
-			file_allowlist: Vec::new(),
-			bucket_folder_allowlist: Vec::new(),
-			global_bucket: None,
-			global_bucket_enforced: false,
 		}
 	}
 }
