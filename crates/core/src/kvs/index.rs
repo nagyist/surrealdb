@@ -6,6 +6,7 @@ use crate::doc::{CursorDoc, Document};
 use crate::err::Error;
 use crate::idx::index::IndexOperation;
 use crate::key::index::df::Df;
+use crate::key::index::ib;
 use crate::key::index::ib::Ib;
 use crate::key::index::ip::Ip;
 use crate::key::thing;
@@ -281,7 +282,6 @@ impl IndexBuilder {
 				if let Err(e) = building.index_appending_loop(None).await {
 					error!("Index appending loop error: {}", e);
 					building.set_status(BuildingStatus::Error(e.to_string())).await;
-					break;
 				}
 				sleep(Duration::from_millis(100)).await;
 			}
@@ -786,7 +786,7 @@ impl Building {
 		trace!("{}: index_appending_loop: {:?}", self.ix.name, initial_count);
 		let mut updates_count = initial_count.map(|_| 0);
 		let (ns, db) = self.opt.ns_db()?;
-		let (beg, end) = crate::key::index::ib::range(ns, db, &self.ix.what, &self.ix.name)?;
+		let (beg, end) = ib::range(ns, db, &self.ix.what, &self.ix.name)?;
 		let rng = beg..end;
 		loop {
 			if self.is_aborted().await {
@@ -798,7 +798,7 @@ impl Building {
 					let mut batch_ids_to_clean = self.clean_queue.lock().await;
 					std::mem::take(&mut *batch_ids_to_clean)
 				};
-				// Clean batch IDs from canceled or failed transactions before checking pending
+				// Clean batch IDs from cancelled or failed transactions before checking pending
 				// state.
 				queue.clean_batch_ids(clean_queue);
 
