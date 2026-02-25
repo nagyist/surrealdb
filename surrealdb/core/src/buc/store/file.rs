@@ -17,6 +17,7 @@ use crate::err::Error;
 pub struct FileStoreOptions {
 	root: ObjectKey,
 	lowercase_paths: bool,
+	bucket_folder_allowlist: Vec<PathBuf>,
 }
 
 /// A store implementation that uses the local filesystem
@@ -34,7 +35,10 @@ impl FileStore {
 	}
 
 	/// Parse a URL into FileStoreOption
-	pub async fn parse_url(url_str: &str) -> Result<Option<FileStoreOptions>, Error> {
+	pub async fn parse_url(
+		url_str: &str,
+		bucket_folder_allowlist: Vec<PathBuf>,
+	) -> Result<Option<FileStoreOptions>, Error> {
 		let Ok(url) = Url::parse(url_str) else {
 			return Ok(None);
 		};
@@ -96,7 +100,7 @@ impl FileStore {
 		}
 
 		// Check if the path is allowed
-		if !is_path_allowed(&path_buf, lowercase_paths) {
+		if !is_path_allowed_with_list(&path_buf, lowercase_paths, &bucket_folder_allowlist) {
 			return Err(Error::FileAccessDenied(path_from_url.clone()));
 		}
 
@@ -124,6 +128,7 @@ impl FileStore {
 		Ok(Some(FileStoreOptions {
 			root: ObjectKey::new(path_from_url),
 			lowercase_paths,
+			bucket_folder_allowlist,
 		}))
 	}
 
@@ -174,7 +179,11 @@ impl FileStore {
 		let full_path = canonical_root.join(&relative_path).clean();
 
 		// Verify the path is within the allowlist
-		if !is_path_allowed(&full_path, self.options.lowercase_paths) {
+		if !is_path_allowed_with_list(
+			&full_path,
+			self.options.lowercase_paths,
+			&self.options.bucket_folder_allowlist,
+		) {
 			return Err(format!(
 				"Path is not inside the allowed bucket directories: {}",
 				full_path.display()
@@ -193,15 +202,6 @@ impl FileStore {
 		}
 		Ok(())
 	}
-}
-
-/// Check if a path is allowed according to the allowlist
-fn is_path_allowed(path_to_check: &std::path::Path, lowercase_paths: bool) -> bool {
-	is_path_allowed_with_list(
-		path_to_check,
-		lowercase_paths,
-		&crate::cnf::FileConfig::default().bucket_folder_allowlist,
-	)
 }
 
 fn is_path_allowed_with_list(

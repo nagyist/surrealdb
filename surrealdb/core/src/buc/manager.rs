@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -30,6 +31,7 @@ pub(crate) struct BucketsManager {
 	provider: Arc<dyn BucketStoreProvider>,
 	global_bucket: Option<String>,
 	global_bucket_enforced: bool,
+	bucket_folder_allowlist: Vec<PathBuf>,
 }
 
 impl BucketsManager {
@@ -44,6 +46,7 @@ impl BucketsManager {
 			provider,
 			global_bucket: file_cfg.global_bucket,
 			global_bucket_enforced: file_cfg.global_bucket_enforced,
+			bucket_folder_allowlist: file_cfg.bucket_folder_allowlist,
 		}
 	}
 
@@ -68,7 +71,7 @@ impl BucketsManager {
 		if !global && self.global_bucket_enforced {
 			bail!(Error::GlobalBucketEnforced);
 		}
-		self.provider.connect(url, global, readonly).await
+		self.provider.connect(url, global, readonly, &self.bucket_folder_allowlist).await
 	}
 
 	/// Connects to a global bucket with automatic namespacing.
@@ -88,7 +91,7 @@ impl BucketsManager {
 		};
 
 		// Connect to the global bucket
-		let global = self.provider.connect(url, true, false).await?;
+		let global = self.provider.connect(url, true, false, &self.bucket_folder_allowlist).await?;
 
 		// Create a prefixstore for the specified bucket
 		let key = ObjectKey::new(format!("/{ns}/{db}/{bu}"));
